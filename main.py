@@ -1,67 +1,94 @@
 import time
-import glob
 import pyautogui
-from PIL import Image
+import numpy as np
 from selenium import webdriver
-from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import NoSuchElementException
 
-DARK_OBSTACLES = [Image.open(img) for img in glob.glob("images\\obstacles\\dark\\" + "*")]
-LIGHT_OBSTACLES = [Image.open(img) for img in glob.glob("images\\obstacles\\light\\" + "*")]
-BACKGROUND = {"light": LIGHT_OBSTACLES, "dark": DARK_OBSTACLES}
-
-chrome_options = Options()
-chrome_options.add_experimental_option("detach", True)
-chrome_options.add_argument("--start-maximized")
-chrome_options.add_argument('--force-dark-mode')
-driver = webdriver.Chrome(options=chrome_options)
-driver.get("https://elgoog.im/dinosaur-game/")
+GAMEOVER_REGION = (890, 610, 140, 130)
 
 
-def get_bg_color(driver):
-    try:
-        driver.find_element(By.CLASS_NAME, "g-dark")
-        return "dark"
-    except NoSuchElementException:
+def get_theme():
+    screen_width, screen_height = pyautogui.size()
+    screenshot = pyautogui.screenshot(region=(int(screen_width/2), int(screen_height/2), 10, 10))
+    screen_pixels = np.array(screenshot.convert("L")).reshape(-1)
+    if len([pixel for pixel in screen_pixels if pixel > 128]) > 80:
         return "light"
+    else:
+        return "dark"
 
 
-time.sleep(2)
-pyautogui.press("space")
-coef_start = time.time()
-coef = 2
-time.sleep(3)
+def locate_dino(theme):
+    try:
+        location = pyautogui.locateOnScreen(f"images\\dino_{theme}.png", confidence=0.7)
+        return location
+    except pyautogui.ImageNotFoundException:
+        print("Error: couldn't find the dino. is the game running?")
 
-bg_color = get_bg_color(driver)
-dino_x, dino_y, dino_width, dino_height = pyautogui.locateOnScreen(f"images\\dino_{bg_color}.png", confidence=0.7)
 
-while True:
-    bg_color = get_bg_color(driver)
-    # Every 10 seconds increase the detection range as the game speed increases.
-    # A larger coefficient lets the bot detect obstacles farther ahead.
-    if time.time() - coef_start > 10:
-        if coef == 3:
-            coef += 1
-            coef_start = time.time()
-        elif coef < 6:
-            coef += 0.5
-            coef_start = time.time()
-
+def detect_obstacle(x, y, width, height):
     screen_image = pyautogui.screenshot(
-        region=(int(dino_x + dino_width),
-                int(dino_y),
-                int(dino_width*coef),
-                int(dino_height*1.5)))
-    
-    for obstacle in BACKGROUND[bg_color]:
-        try:
-            pyautogui.locate(
-                needleImage=obstacle,
-                haystackImage=screen_image,
-                confidence=0.5,
-                grayscale=True)
-            pyautogui.press("space")
-            break
-        except pyautogui.ImageNotFoundException:
-            continue
+        region=(int(x),
+                int(y),
+                int(width),
+                int(height)))
+    pixels = np.array(screen_image.convert("L")).reshape(-1)
+    light_pixels = np.count_nonzero(pixels >= 128)
+    dark_pixels = pixels.size - light_pixels
+    obstacle_ratio = 100 * min(light_pixels, dark_pixels) / pixels.size
+    if obstacle_ratio >= 2:
+        return True
+
+
+def is_game_over():
+    screen_image = pyautogui.screenshot(region=GAMEOVER_REGION)
+    try:
+        pyautogui.locate("images/gameover.png", screen_image, confidence=0.6, grayscale=True)
+        return True
+    except pyautogui.ImageNotFoundException:
+        return False
+
+
+def automate_game():
+    chrome_options = Options()
+    chrome_options.add_experimental_option("detach", True)
+    chrome_options.add_argument("--start-maximized")
+    chrome_options.add_argument('--force-dark-mode')
+    driver = webdriver.Chrome(options=chrome_options)
+    driver.get("https://elgoog.im/dinosaur-game/")
+
+    pyautogui.FAILSAFE = False
+    time.sleep(3)
+    pyautogui.press("space")
+    last_speedup = time.time()
+    lookahead = 2
+    time.sleep(3)
+    dino_location = locate_dino(get_theme())
+    if dino_location:
+        dino_x, dino_y, dino_width, dino_height = dino_location
+        while True:
+            if time.time() - last_speedup > 10:
+                if lookahead < 5:
+                    lookahead += 0.5
+                    last_speedup = time.time()
+
+            if is_game_over():
+                pyautogui.press("space")
+                lookahead = 2
+                last_speedup = time.time()
+                time.sleep(1)
+                continue
+
+            obstacle_ahead = detect_obstacle(x=dino_x+dino_width,
+                                            y=dino_y,
+                                            width=dino_width*lookahead,
+                                            height=dino_height*(4/5))
+
+            if obstacle_ahead:
+                pyautogui.press("space")
+            time.sleep(0.005)
+    else:
+        return
+
+
+if __name__ == "__main__":
+    automate_game()

@@ -1,0 +1,5 @@
+numpy==2.5.3
+opencv-python==5.0.0.93
+pillow==12.3.0
+PyAutoGUI==0.9.54
+selenium==4.50.0
